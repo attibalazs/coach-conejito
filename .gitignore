@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.env
+
+# Project Specific Data (CRITICAL)
+data/
+
+# Streamlit
+.streamlit/config.toml
+# (Do not ignore secrets.toml if you use it for production, but usually better to ignore)
+.streamlit/secrets.toml
+
+# OS
+.DS_Store
