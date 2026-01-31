@@ -12,6 +12,17 @@ from modules.data_manager import (
 from modules.gemini_coach import get_ai_coach_response, DEFAULT_COACH_PROMPT
 from modules.garmin_client import sync_garmin_activities, is_garmin_authenticated
 
+MODEL_OPTIONS = [
+    "deepseek-r1:8b", 
+    "mlx-deepseek-8b",
+    "mlx-phi4",
+    "gemini-1.5-flash", 
+    "gemini-1.5-pro", 
+    "qwen2.5-coder:latest", 
+    "phi4-mini:3.8b", 
+    "phi4"
+]
+
 # Page Config
 st.set_page_config(
     page_title="Coach Conejito HQ",
@@ -65,16 +76,38 @@ if page == "Command Center":
     col_chat, col_data = st.columns([1.2, 1])
 
     with col_chat:
-        st.subheader("💬 Coach Chat")
+        col_header, col_model = st.columns([1, 1])
+        with col_header:
+            st.subheader("💬 Coach Chat")
+        with col_model:
+            # Ensure current model is in options
+            if st.session_state.model_name not in MODEL_OPTIONS:
+                MODEL_OPTIONS.append(st.session_state.model_name)
+            
+            st.session_state.model_name = st.selectbox(
+                "Model", 
+                MODEL_OPTIONS, 
+                index=MODEL_OPTIONS.index(st.session_state.model_name),
+                label_visibility="collapsed",
+                key="chat_model_selector"
+            )
         
         # 1. Initialize and Load history
         if "messages" not in st.session_state:
             st.session_state.messages = load_chat_history(current_user)
 
         # 2. Display existing history
-        for msg in st.session_state.messages:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
+        with st.container(height=600):
+            for i, msg in enumerate(st.session_state.messages):
+                with st.chat_message(msg["role"]):
+                    c1, c2 = st.columns([0.9, 0.1])
+                    with c1:
+                        st.markdown(msg["content"])
+                    with c2:
+                        if st.button("❌", key=f"del_{i}", help="Delete this message"):
+                            st.session_state.messages.pop(i)
+                            save_chat_history(current_user, st.session_state.messages)
+                            st.rerun()
 
         # 3. Handle Chat Input
         if prompt := st.chat_input("Ask Coach Conejito..."):
@@ -191,17 +224,12 @@ elif page == "Settings":
     
     st.subheader("🧠 AI")
     st.session_state.gemini_api_key = st.text_input("Gemini API Key", value=st.session_state.gemini_api_key, type="password")
-    model_options = [
-        "deepseek-r1:8b", 
-        "mlx-deepseek-8b",
-        "mlx-phi4",
-        "gemini-1.5-flash", 
-        "gemini-1.5-pro", 
-        "qwen2.5-coder:latest", 
-        "phi4-mini:3.8b", 
-        "phi4"
-    ]
-    st.session_state.model_name = st.selectbox("Model", model_options, index=model_options.index(st.session_state.model_name))
+    
+    # Ensure current model is in options
+    if st.session_state.model_name not in MODEL_OPTIONS:
+        MODEL_OPTIONS.append(st.session_state.model_name)
+
+    st.session_state.model_name = st.selectbox("Model", MODEL_OPTIONS, index=MODEL_OPTIONS.index(st.session_state.model_name))
 
     st.markdown("---")
     st.subheader("📝 System Prompt")
