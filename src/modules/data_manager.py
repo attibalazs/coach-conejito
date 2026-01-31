@@ -105,3 +105,24 @@ def create_user(user_id):
     if not os.path.exists(os.path.join(USERS_DIR, user_id, "profile", "user.yaml")):
         save_user_profile(user_id, {"name": user_id, "goals": "", "injuries": ""})
     return True
+
+# --- Custom Prompt Storage ---
+
+def save_model_prompt(user_id, model_name, prompt_text):
+    """Save a custom system prompt for a specific model."""
+    _, profile_dir, _ = ensure_user_dirs(user_id)
+    prompts_dir = os.path.join(profile_dir, "prompts")
+    os.makedirs(prompts_dir, exist_ok=True)
+    safe_name = model_name.replace(":", "_").replace("/", "_")
+    with open(os.path.join(prompts_dir, f"{safe_name}.txt"), "w") as f:
+        f.write(prompt_text)
+
+def load_model_prompt(user_id, model_name):
+    """Load custom system prompt for a model. Returns None if no custom prompt."""
+    _, profile_dir, _ = ensure_user_dirs(user_id)
+    safe_name = model_name.replace(":", "_").replace("/", "_")
+    filename = os.path.join(profile_dir, "prompts", f"{safe_name}.txt")
+    if os.path.exists(filename):
+        with open(filename, "r") as f:
+            return f.read()
+    return None
