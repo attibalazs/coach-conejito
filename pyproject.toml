@@ -18,3 +18,13 @@ dependencies = [
     "streamlit>=1.50.0",
     "watchdog>=6.0.0",
 ]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
