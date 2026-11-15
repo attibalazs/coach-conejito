@@ -3,8 +3,8 @@ import json
 from unittest.mock import patch, MagicMock
 from datetime import date
 
-from modules.garmin_client import get_token_dir, is_garmin_authenticated, sync_garmin_activities
-from modules.data_manager import ensure_user_dirs
+from src.modules.garmin_client import get_token_dir, is_garmin_authenticated, sync_garmin_activities
+from src.modules.data_manager import ensure_user_dirs
 
 
 # =====================================================================
@@ -59,7 +59,7 @@ def test_sync_fresh_login(test_user):
     mock_garth = MagicMock()
     mock_client.garth = mock_garth
 
-    with patch("modules.garmin_client.Garmin", return_value=mock_client):
+    with patch("src.modules.garmin_client.Garmin", return_value=mock_client):
         result = sync_garmin_activities(
             test_user, email="test@example.com", password="pass123",
             start_date_obj=date(2026, 1, 28), days=7,
@@ -85,7 +85,7 @@ def test_sync_resume_session(test_user):
     mock_garth = MagicMock()
     mock_client.garth = mock_garth
 
-    with patch("modules.garmin_client.Garmin", return_value=mock_client):
+    with patch("src.modules.garmin_client.Garmin", return_value=mock_client):
         result = sync_garmin_activities(
             test_user, start_date_obj=date(2026, 1, 28), days=7,
         )
@@ -103,7 +103,7 @@ def test_sync_expired_session(test_user):
     mock_client = MagicMock()
     mock_client.login.side_effect = Exception("401 Unauthorized")
 
-    with patch("modules.garmin_client.Garmin", return_value=mock_client):
+    with patch("src.modules.garmin_client.Garmin", return_value=mock_client):
         result = sync_garmin_activities(test_user)
 
     assert "Session expired" in result
@@ -120,7 +120,7 @@ def test_sync_corrupt_tokens(test_user):
     mock_client = MagicMock()
     mock_client.login.side_effect = json.JSONDecodeError("Expecting value", "", 0)
 
-    with patch("modules.garmin_client.Garmin", return_value=mock_client):
+    with patch("src.modules.garmin_client.Garmin", return_value=mock_client):
         result = sync_garmin_activities(test_user)
 
     # Corrupt tokens detected → cleared, no credentials → "No active session"
@@ -134,9 +134,13 @@ def test_sync_no_session_no_credentials(test_user):
 
 
 def test_sync_deduplicates(test_user):
+    class FakeDate(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 2, 7)
+
     mock_client = MagicMock()
-    # Two chunks return overlapping activity IDs
-    # Range: Dec 1 → Jan 31 requires two 30-day chunks
+    # Three chunks needed: Dec 1-31, Jan 1-31, Feb 1-7
     mock_client.get_activities_by_date.side_effect = [
         [
             {"activityId": 300, "startTimeLocal": "2025-12-05 08:00:00", "distance": 10000},
@@ -146,15 +150,18 @@ def test_sync_deduplicates(test_user):
             {"activityId": 301, "startTimeLocal": "2025-12-28 08:00:00", "distance": 12000},
             {"activityId": 302, "startTimeLocal": "2026-01-20 08:00:00", "distance": 8000},
         ],
+        [],  # Third chunk (Feb) returns empty
     ]
     mock_garth = MagicMock()
     mock_client.garth = mock_garth
 
-    with patch("modules.garmin_client.Garmin", return_value=mock_client):
+    with patch("src.modules.garmin_client.date", FakeDate), \
+         patch("src.modules.garmin_client.Garmin", return_value=mock_client):
         result = sync_garmin_activities(
             test_user, email="test@example.com", password="pass123",
             start_date_obj=date(2025, 12, 1), days=60,
         )
+
 
     assert "Successfully synced 3 activities" in result
     _, _, garmin_dir = ensure_user_dirs(test_user)

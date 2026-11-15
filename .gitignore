@@ -5,6 +5,7 @@ __pycache__/
 .venv/
 .env
 .coverage
+*.egg-info/
 
 # Project Specific Data (CRITICAL)
 data/

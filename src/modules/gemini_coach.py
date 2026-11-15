@@ -2,7 +2,7 @@ import os
 import requests
 import json
 import time
-from modules.data_manager import load_journal_entries, load_user_profile, load_garmin_activities, load_model_prompt
+from src.modules.data_manager import load_journal_entries, load_user_profile, load_garmin_activities, load_model_prompt
 
 # Global cache for MLX model to avoid reloading on every request
 MLX_CACHE = {
@@ -52,13 +52,14 @@ def format_garmin_for_ai(activities):
     
     return "\n".join(summary)
 
-DEFAULT_COACH_PROMPT = """You are Coach Conejito, an expert endurance and trail running coach.
+DEFAULT_COACH_PROMPT = """You are Coach Conejito, an expert endurance, trail running, and mental performance coach.
 
 RESPONSE FORMAT — use this structure:
-1. **Flags**: Any injury or overtraining warnings. Check if soreness is rising on consecutive days, RPE >7 for 3+ days, HR elevated at same pace, or mood declining. If none, say "No flags."
-2. **Review**: 2-3 sentences on recent training load trends and goal alignment.
+1. **Flags**: Any injury, overtraining, or extreme mental fatigue warnings. Check if soreness is rising on consecutive days, RPE >7 for 3+ days, HR elevated at same pace, or mood/motivation declining. If none, say "No flags."
+2. **Review**: 2-3 sentences on recent training load trends, mental fatigue/stress levels, and goal alignment.
 3. **Prescription**: Next 2-3 days with distance, pace, HR zone, terrain. Use bullet list.
 4. **Prehab**: One mobility or strength recommendation based on current injury status.
+5. **Mental/Soul Focus**: Recommend a mental strength exercise, visualization topic, self-talk mantra, or breathing practice (e.g. Stroop training, worst-case visualization, box breathing, rhythmic breathing, gratitude focus) tailored to the upcoming workouts or current fatigue state.
 
 TRAINING RULES:
 - Max 10% weekly volume increase. Down week (60-70%) every 3-4 weeks.
@@ -120,14 +121,47 @@ def compute_training_stats(activities):
 
     return "\n".join(lines)
 
+def format_mental_logs_for_ai(logs):
+    """Summarizes mental training logs for the LLM prompt."""
+    if not logs:
+        return "No recent mental training sessions logged."
+    
+    summary = []
+    for entry in logs[:7]:
+        date = entry.get("date", "Unknown")
+        session_type = entry.get("type", "Unknown")
+        metrics = entry.get("metrics", {})
+        notes = entry.get("notes", "")
+        
+        metrics_str = ""
+        if session_type in ["Stroop Test", "Mental Math"]:
+            score = metrics.get("score")
+            acc = metrics.get("accuracy")
+            rt = metrics.get("reaction_time")
+            metrics_str = f" | Score: {score} (Acc: {acc}%, RT: {rt}s)"
+        elif "N-Back" in session_type:
+            score = metrics.get("score")
+            pos_hits = metrics.get("pos_hits")
+            pos_matches = metrics.get("pos_matches")
+            let_hits = metrics.get("let_hits")
+            let_matches = metrics.get("let_matches")
+            metrics_str = f" | Cognitive Score: {score}% (Pos Hits: {pos_hits}/{pos_matches}, Let Hits: {let_hits}/{let_matches})"
+        
+        note_str = f" | Notes: {notes}" if notes else ""
+        summary.append(f"- {date}: {session_type}{metrics_str}{note_str}")
+        
+    return "\n".join(summary)
+
 def get_system_prompt(user_id, model_name="phi4-mini:3.8b"):
-    from modules.data_manager import load_coach_plan
+    from src.modules.data_manager import load_coach_plan
+    from src.modules.mental_gym import load_mental_logs
     from datetime import date as dt_date, timedelta
 
     profile = load_user_profile(user_id)
     journals = load_journal_entries(user_id)
     activities = load_garmin_activities(user_id)
     current_plan = load_coach_plan(user_id)
+    mental_logs = load_mental_logs(user_id)
 
     today_date = dt_date.today()
     tomorrow_date = today_date + timedelta(days=1)
@@ -138,6 +172,7 @@ def get_system_prompt(user_id, model_name="phi4-mini:3.8b"):
     recent_journals = journals[:7]
     garmin_summary = format_garmin_for_ai(activities)
     training_stats = compute_training_stats(activities)
+    mental_summary = format_mental_logs_for_ai(mental_logs)
 
     custom_prompt = load_model_prompt(user_id, model_name)
     coaching_instructions = custom_prompt if custom_prompt else DEFAULT_COACH_PROMPT
@@ -162,7 +197,10 @@ TRAINING LOAD (pre-computed):
 {training_stats}
 
 SUBJECTIVE LOG (journals):
-{recent_journals}"""
+{recent_journals}
+
+MENTAL TRAINING LOG (recent sessions):
+{mental_summary}"""
 
     return f"{coaching_instructions}\n{data_block}"
 
