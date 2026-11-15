@@ -3,7 +3,7 @@ import json
 import shutil
 from datetime import date, timedelta, datetime
 from garminconnect import Garmin
-from modules.data_manager import ensure_user_dirs
+from src.modules.data_manager import ensure_user_dirs
 
 def get_token_dir(user_id):
     _, profile_dir, _ = ensure_user_dirs(user_id)
@@ -142,19 +142,60 @@ def sync_garmin_activities(user_id, email=None, password=None, start_date_obj=No
 
         saved_count = 0
         seen_ids = set()
+
+        # Try to get SQLite repository for saving
+        db_repo = None
+        try:
+            from src.modules.repositories import ActivityRepository
+            from pathlib import Path
+            db_path = f"data/users/{user_id}/coach.db"
+            if Path(db_path).exists():
+                db_repo = ActivityRepository(db_path)
+        except Exception as e:
+            print(f"Warning: Could not initialize SQLite repository: {e}")
+
         for activity in all_activities:
             activity_id = activity.get("activityId")
             if not activity_id or activity_id in seen_ids:
                 continue
 
             seen_ids.add(activity_id)
+
+            # Save to JSON (backward compatibility)
             filename = os.path.join(garmin_dir, f"activity_{activity_id}.json")
             with open(filename, "w") as f:
                 json.dump(activity, f, indent=4)
+
+            # Also save to SQLite if available
+            if db_repo:
+                try:
+                    db_repo.save(activity)
+                except Exception as e:
+                    print(f"Warning: Failed to save activity {activity_id} to SQLite: {e}")
+
             saved_count += 1
+
+        # Close SQLite connection
+        if db_repo:
+            db_repo.close()
 
         return f"Successfully synced {saved_count} activities since {start_date_obj.isoformat()}."
 
     except Exception as e:
         print(f"Unexpected Garmin Sync Error: {str(e)}")
         return f"Unexpected Error: {str(e)}"
+
+class GarminClient:
+    def __init__(self, user_id):
+        self.user_id = user_id
+
+    def sync_activities(self, days=7):
+        res = sync_garmin_activities(self.user_id, days=days)
+        if "Successfully synced" in res:
+            try:
+                count = int(res.split("Successfully synced ")[1].split(" activities")[0])
+                return [{}] * count
+            except Exception:
+                return []
+        return []
+

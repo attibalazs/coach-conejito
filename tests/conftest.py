@@ -10,15 +10,15 @@ def data_dirs(tmp_path):
     """Redirect data_manager paths to tmp_path for isolation."""
     data_dir = str(tmp_path / "data")
     users_dir = os.path.join(data_dir, "users")
-    with patch("modules.data_manager.DATA_DIR", data_dir), \
-         patch("modules.data_manager.USERS_DIR", users_dir):
+    with patch("src.modules.data_manager.DATA_DIR", data_dir), \
+         patch("src.modules.data_manager.USERS_DIR", users_dir):
         yield tmp_path
 
 
 @pytest.fixture
 def test_user(data_dirs):
     """Create a test user with directories ready."""
-    from modules.data_manager import ensure_user_dirs
+    from src.modules.data_manager import ensure_user_dirs
     ensure_user_dirs("testrunner")
     return "testrunner"
 

@@ -3,7 +3,7 @@ import json
 import yaml
 from datetime import date
 
-from modules.data_manager import (
+from src.modules.data_manager import (
     ensure_user_dirs,
     list_users,
     save_journal_entry,
@@ -53,7 +53,7 @@ def test_list_users_with_users(data_dirs):
 def test_list_users_ignores_files(data_dirs):
     ensure_user_dirs("alice")
     # Create a file in USERS_DIR
-    from modules.data_manager import USERS_DIR
+    from src.modules.data_manager import USERS_DIR
     with open(os.path.join(USERS_DIR, "not_a_user.txt"), "w") as f:
         f.write("junk")
     users = list_users()
@@ -164,7 +164,7 @@ def test_load_chat_history_empty(test_user):
 def test_create_user_creates_dirs_and_profile(data_dirs):
     result = create_user("newathlete")
     assert result is True
-    from modules.data_manager import USERS_DIR
+    from src.modules.data_manager import USERS_DIR
     profile_path = os.path.join(USERS_DIR, "newathlete", "profile", "user.yaml")
     assert os.path.exists(profile_path)
 

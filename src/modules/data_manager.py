@@ -3,6 +3,7 @@ import os
 import yaml
 import shutil
 from datetime import date
+from pathlib import Path
 
 DATA_DIR = "data"
 USERS_DIR = os.path.join(DATA_DIR, "users")
@@ -28,6 +29,18 @@ def save_journal_entry(user_id, entry_date, data):
     filename = os.path.join(journal_dir, f"{entry_date.isoformat()}.json")
     with open(filename, "w") as f:
         json.dump(data, f, indent=4)
+
+    # Also save to SQLite
+    try:
+        from src.modules.repositories import JournalRepository
+        db_path = f"data/users/{user_id}/coach.db"
+        if Path(db_path).exists():
+            repo = JournalRepository(db_path)
+            repo.save(data)
+            repo.close()
+    except Exception as e:
+        # Don't fail if SQLite save fails (backward compatibility)
+        print(f"Warning: Failed to save to SQLite: {e}")
 
 def load_journal_entries(user_id):
     journal_dir, _, _ = ensure_user_dirs(user_id)

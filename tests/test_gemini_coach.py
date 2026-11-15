@@ -4,7 +4,7 @@ import json
 import datetime as dt_module
 from unittest.mock import patch, MagicMock
 
-from modules.gemini_coach import (
+from src.modules.gemini_coach import (
     format_pace,
     format_garmin_for_ai,
     compute_training_stats,
@@ -208,7 +208,7 @@ def test_system_prompt_uses_default(test_user):
 
 
 def test_system_prompt_uses_custom(test_user):
-    from modules.data_manager import save_model_prompt
+    from src.modules.data_manager import save_model_prompt
     save_model_prompt(test_user, "phi4-mini:3.8b", "You are a trail running guru.")
     prompt = get_system_prompt(test_user, model_name="phi4-mini:3.8b")
     assert "trail running guru" in prompt
@@ -216,7 +216,7 @@ def test_system_prompt_uses_custom(test_user):
 
 
 def test_system_prompt_includes_profile(test_user, sample_profile):
-    from modules.data_manager import save_user_profile
+    from src.modules.data_manager import save_user_profile
     save_user_profile(test_user, sample_profile)
     prompt = get_system_prompt(test_user)
     assert sample_profile["name"] in prompt
@@ -243,7 +243,7 @@ def test_ollama_success(test_user):
     mock_resp.json.return_value = {"response": "Rest today, run tomorrow."}
     mock_resp.raise_for_status = MagicMock()
 
-    with patch("modules.gemini_coach.requests.post", return_value=mock_resp):
+    with patch("src.modules.gemini_coach.requests.post", return_value=mock_resp):
         text, duration = get_ai_coach_response(
             api_key="", user_id=test_user, model_name="deepseek-r1:8b",
             chat_mode=False,
@@ -254,7 +254,7 @@ def test_ollama_success(test_user):
 
 def test_ollama_connection_error(test_user):
     import requests as req
-    with patch("modules.gemini_coach.requests.post", side_effect=req.exceptions.ConnectionError):
+    with patch("src.modules.gemini_coach.requests.post", side_effect=req.exceptions.ConnectionError):
         text, duration = get_ai_coach_response(
             api_key="", user_id=test_user, model_name="deepseek-r1:8b",
             chat_mode=False,
@@ -335,7 +335,7 @@ def test_chat_mode_prompt(test_user):
     mock_resp.json.return_value = {"response": "Chat reply."}
     mock_resp.raise_for_status = MagicMock()
 
-    with patch("modules.gemini_coach.requests.post", return_value=mock_resp) as mock_post:
+    with patch("src.modules.gemini_coach.requests.post", return_value=mock_resp) as mock_post:
         get_ai_coach_response(
             api_key="", user_id=test_user, model_name="deepseek-r1:8b",
             chat_mode=True, user_message="How are my legs?",
@@ -351,7 +351,7 @@ def test_analyze_mode_prompt(test_user):
     mock_resp.json.return_value = {"response": "Analysis done."}
     mock_resp.raise_for_status = MagicMock()
 
-    with patch("modules.gemini_coach.requests.post", return_value=mock_resp) as mock_post:
+    with patch("src.modules.gemini_coach.requests.post", return_value=mock_resp) as mock_post:
         get_ai_coach_response(
             api_key="", user_id=test_user, model_name="deepseek-r1:8b",
             chat_mode=False,
