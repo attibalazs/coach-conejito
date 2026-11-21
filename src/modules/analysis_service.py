@@ -641,3 +641,276 @@ class AnalysisService:
             'change_pct': round(change_pct, 1),
             'confidence': confidence
         }
+
+    @staticmethod
+    def _is_running_activity(act: Dict) -> bool:
+        t = str(act.get("activity_type") or "").lower()
+        return "running" in t or t in ("run", "trail_run", "virtual_run", "treadmill_running")
+
+    def _summarize_activities_window(self, activities: List[Dict], start_d: date, end_d: date) -> Dict:
+        """
+        Compute aggregate running volume, Albon Impact vs Cardio, SWAP polarization,
+        and Uphill Athlete decoupling. Non-running activities (cycling, strength, yoga)
+        contribute to Cardio (TRIMP) and cross_training counts, not running distance/Impact/cadence.
+        """
+        from src.modules.methodology import (
+            compute_aerobic_decoupling,
+            compute_benzie_biomechanics,
+            compute_cardio_score,
+            compute_impact_and_gap,
+            compute_monotony_and_strain,
+            compute_speed_score,
+        )
+
+        total_dist_km = 0.0
+        total_dur_min = 0.0
+        total_elev_gain = 0.0
+        total_elev_loss = 0.0
+        total_impact = 0.0
+        total_cardio = 0.0
+        total_speed = 0.0
+        hrs: List[float] = []
+        cadences: List[float] = []
+        gcts: List[float] = []
+        vert_oscs: List[float] = []
+        strides: List[float] = []
+        efficiencies: List[float] = []
+        decouplings: List[float] = []
+        intensity_sec = {"easy": 0.0, "tempo": 0.0, "hard": 0.0}
+        daily_impact: Dict[date, float] = {}
+        daily_cardio: Dict[date, float] = {}
+        running_sessions = 0
+        cycling_sessions = 0
+        cycling_km = 0.0
+        strength_sessions = 0
+
+        for act in activities:
+            act_type = str(act.get("activity_type") or "").lower()
+            is_run = self._is_running_activity(act)
+
+            cardio = compute_cardio_score(act)
+            total_cardio += cardio
+
+            act_date_str = str(act.get("date") or "")[:10]
+            try:
+                act_d = date.fromisoformat(act_date_str)
+                daily_cardio[act_d] = daily_cardio.get(act_d, 0.0) + cardio
+            except ValueError:
+                act_d = None
+
+            if not is_run:
+                if "cycling" in act_type or "biking" in act_type or "ride" in act_type:
+                    cycling_sessions += 1
+                    cycling_km += (act.get("distance_m") or 0) / 1000.0
+                elif "strength" in act_type:
+                    strength_sessions += 1
+                continue
+
+            running_sessions += 1
+            dist_km = (act.get("distance_m") or 0) / 1000.0
+            dur_min = (act.get("duration_sec") or 0) / 60.0
+            total_dist_km += dist_km
+            total_dur_min += dur_min
+            total_elev_gain += float(act.get("elevation_gain_m") or 0.0)
+            total_elev_loss += float(act.get("elevation_loss_m") or 0.0)
+
+            impact, gap_pace = compute_impact_and_gap(act)
+            speed = compute_speed_score(act, gap_pace_sec=gap_pace)
+            total_impact += impact
+            total_speed += speed
+
+            if act_d is not None:
+                daily_impact[act_d] = daily_impact.get(act_d, 0.0) + impact
+
+            hr = act.get("avg_hr")
+            if hr:
+                hrs.append(float(hr))
+                if gap_pace and gap_pace > 0:
+                    # GAP speed (m/s) / HR * 100
+                    efficiencies.append(round((1000.0 / gap_pace) / float(hr) * 100.0, 3))
+
+            # Time-in-zone polarization: prefer second-by-second HR stream when available
+            used_stream_hr = False
+            raw_streams = act.get("streams_json")
+            if raw_streams:
+                try:
+                    import json as _json
+                    st = _json.loads(raw_streams) if isinstance(raw_streams, str) else raw_streams
+                    t_arr = (st.get("time") or {}).get("data") if isinstance(st.get("time"), dict) else st.get("time")
+                    hr_arr = (st.get("heartrate") or {}).get("data") if isinstance(st.get("heartrate"), dict) else st.get("heartrate")
+                    if t_arr and hr_arr:
+                        for i in range(1, min(len(t_arr), len(hr_arr))):
+                            dt = float(t_arr[i]) - float(t_arr[i - 1])
+                            if dt <= 0 or dt > 60:
+                                continue
+                            h_val = float(hr_arr[i])
+                            if h_val < self.ZONE_2_MAX:
+                                intensity_sec["easy"] += dt
+                            elif h_val < self.ZONE_3_MAX:
+                                intensity_sec["tempo"] += dt
+                            else:
+                                intensity_sec["hard"] += dt
+                        used_stream_hr = True
+                except Exception:
+                    used_stream_hr = False
+
+            if not used_stream_hr and hr:
+                dur_s = float(act.get("duration_sec") or 0.0)
+                if hr < self.ZONE_2_MAX:
+                    intensity_sec["easy"] += dur_s
+                elif hr < self.ZONE_3_MAX:
+                    intensity_sec["tempo"] += dur_s
+                else:
+                    intensity_sec["hard"] += dur_s
+
+            bio = compute_benzie_biomechanics(act)
+            if bio["cadence_spm"] is not None:
+                cadences.append(bio["cadence_spm"])
+            if bio["ground_contact_time_ms"] is not None:
+                gcts.append(bio["ground_contact_time_ms"])
+            if bio["vertical_oscillation_cm"] is not None:
+                vert_oscs.append(bio["vertical_oscillation_cm"])
+            if bio["stride_length_m"] is not None:
+                strides.append(bio["stride_length_m"])
+
+            dec = compute_aerobic_decoupling(act)
+            if dec is not None:
+                decouplings.append(dec)
+
+        n_sessions = running_sessions
+        tot_int = sum(intensity_sec.values()) or 1.0
+        polarization = {
+            "easy_pct": round(intensity_sec["easy"] / tot_int * 100, 1),
+            "tempo_pct": round(intensity_sec["tempo"] / tot_int * 100, 1),
+            "hard_pct": round(intensity_sec["hard"] / tot_int * 100, 1),
+        }
+
+        # Last 7 days of window for Foster Monotony & Strain
+        last_7_impact = [daily_impact.get(end_d - timedelta(days=i), 0.0) for i in range(7)]
+        monotony, strain = compute_monotony_and_strain(last_7_impact)
+
+        return {
+            "start_date": start_d.isoformat(),
+            "end_date": end_d.isoformat(),
+            "sessions": n_sessions,
+            "distance_km": round(total_dist_km, 2),
+            "duration_min": round(total_dur_min, 1),
+            "elevation_gain_m": round(total_elev_gain, 0),
+            "elevation_loss_m": round(total_elev_loss, 0),
+            "impact_score": round(total_impact, 1),
+            "cardio_score": round(total_cardio, 1),
+            "speed_score": round(total_speed, 1),
+            "impact_to_cardio_ratio": round(total_impact / total_cardio, 2) if total_cardio > 0 else None,
+            "avg_hr": round(mean(hrs), 1) if hrs else None,
+            "avg_cadence": round(mean(cadences), 1) if cadences else None,
+            "avg_gct_ms": round(mean(gcts), 1) if gcts else None,
+            "avg_vertical_oscillation_cm": round(mean(vert_oscs), 2) if vert_oscs else None,
+            "avg_stride_length_m": round(mean(strides), 2) if strides else None,
+            "aerobic_efficiency": round(mean(efficiencies), 3) if efficiencies else None,
+            "avg_decoupling_pct": round(mean(decouplings), 2) if decouplings else None,
+            "polarization": polarization,
+            "monotony_7d": monotony,
+            "strain_7d": strain,
+            "cross_training": {
+                "cycling_sessions": cycling_sessions,
+                "cycling_km": round(cycling_km, 1),
+                "strength_sessions": strength_sessions,
+            },
+        }
+
+    def get_period_summary(
+        self,
+        days: int = 28,
+        end_date: Optional[date] = None,
+        compare_previous: bool = True,
+    ) -> Dict:
+        """
+        Compute methodology-driven period summary (Albon Dual-Load, SWAP Polarization/Economy,
+        Uphill Athlete Decoupling, and Coggan Dual CTL/ATL/TSB).
+        """
+        from src.modules.methodology import (
+            compute_cardio_score,
+            compute_ctl_atl_tsb,
+            compute_impact_and_gap,
+            compute_speed_score,
+        )
+
+        end_d = end_date or date.today()
+        start_d = end_d - timedelta(days=days - 1)
+        activities = self.activity_repo.get_range(start_d, end_d)
+        summary = self._summarize_activities_window(activities, start_d, end_d)
+
+        # Dual/Triple CTL / ATL / TSB (needs ~84 days of history for accurate 42d EMA)
+        hist_start = end_d - timedelta(days=90)
+        hist_activities = self.activity_repo.get_range(hist_start, end_d)
+        daily_impact: Dict[date, float] = {}
+        daily_cardio: Dict[date, float] = {}
+        daily_speed: Dict[date, float] = {}
+        for act in hist_activities:
+            try:
+                act_d = date.fromisoformat(str(act.get("date") or "")[:10])
+            except ValueError:
+                continue
+            car = compute_cardio_score(act)
+            daily_cardio[act_d] = daily_cardio.get(act_d, 0.0) + car
+            if self._is_running_activity(act):
+                imp, gap_p = compute_impact_and_gap(act)
+                spd = compute_speed_score(act, gap_pace_sec=gap_p)
+                daily_impact[act_d] = daily_impact.get(act_d, 0.0) + imp
+                daily_speed[act_d] = daily_speed.get(act_d, 0.0) + spd
+
+        summary["dual_load"] = {
+            "impact": compute_ctl_atl_tsb(daily_impact, end_d),
+            "cardio": compute_ctl_atl_tsb(daily_cardio, end_d),
+            "speed": compute_ctl_atl_tsb(daily_speed, end_d),
+        }
+
+        if compare_previous:
+            prev_end = start_d - timedelta(days=1)
+            prev_start = prev_end - timedelta(days=days - 1)
+            prev_acts = self.activity_repo.get_range(prev_start, prev_end)
+            prev = self._summarize_activities_window(prev_acts, prev_start, prev_end)
+
+            def _pct(cur, old):
+                if old is None or old == 0 or cur is None:
+                    return None
+                return round(((cur - old) / old) * 100.0, 1)
+
+            summary["delta_vs_previous"] = {
+                "distance_pct": _pct(summary["distance_km"], prev["distance_km"]),
+                "impact_pct": _pct(summary["impact_score"], prev["impact_score"]),
+                "cardio_pct": _pct(summary["cardio_score"], prev["cardio_score"]),
+                "efficiency_pct": _pct(summary["aerobic_efficiency"], prev["aerobic_efficiency"]),
+            }
+
+        return summary
+
+    def get_trend_series(self, num_weeks: int = 12, end_date: Optional[date] = None) -> List[Dict]:
+        """Return weekly time-series rows for trend analysis across all methodology metrics."""
+        end_d = end_date or date.today()
+        current_week_start = end_d - timedelta(days=end_d.weekday())
+        rows: List[Dict] = []
+
+        for i in range(num_weeks - 1, -1, -1):
+            w_start = current_week_start - timedelta(weeks=i)
+            w_end = w_start + timedelta(days=6)
+            acts = self.activity_repo.get_range(w_start, w_end)
+            row = self._summarize_activities_window(acts, w_start, w_end)
+            iso_year, iso_week, _ = w_start.isocalendar()
+            row["week"] = f"{iso_year}-W{iso_week:02d}"
+
+            try:
+                risk = self.detect_injury_risk(w_end)
+                row["injury_risk_score"] = round(risk.risk_score, 1)
+                row["injury_risk_level"] = risk.overall_risk
+                row["acwr"] = round(risk.acwr, 2) if risk.acwr is not None else None
+                row["risk_factors"] = risk.risk_factors
+            except Exception:
+                row["injury_risk_score"] = None
+                row["injury_risk_level"] = None
+                row["acwr"] = None
+                row["risk_factors"] = []
+
+            rows.append(row)
+
+        return rows

@@ -17,3 +17,8 @@ data/
 
 # OS
 .DS_Store
+
+# Next.js web app build & personal data exports
+web/node_modules/
+web/.next/
+web/public/data/

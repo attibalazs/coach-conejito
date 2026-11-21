@@ -186,16 +186,96 @@ def sync_garmin_activities(user_id, email=None, password=None, start_date_obj=No
         return f"Unexpected Error: {str(e)}"
 
 class GarminClient:
-    def __init__(self, user_id):
+    """High-level Garmin Connect client for CLI syncing of activities and wellness."""
+
+    def __init__(self, user_id: str):
         self.user_id = user_id
 
-    def sync_activities(self, days=7):
-        res = sync_garmin_activities(self.user_id, days=days)
+    @staticmethod
+    def login(user_id: str, email: str, password: str) -> None:
+        """Authenticate with Garmin Connect and persist garth tokens."""
+        token_dir = get_token_dir(user_id)
+        client = Garmin(email, password)
+        client.login()
+        if os.path.exists(token_dir):
+            shutil.rmtree(token_dir)
+        os.makedirs(token_dir, exist_ok=True)
+        client.garth.dump(token_dir)
+
+    def _get_client(self) -> Garmin:
+        """Resume an authenticated Garmin session from stored tokens."""
+        token_dir = get_token_dir(self.user_id)
+        if not is_garmin_authenticated(self.user_id):
+            raise RuntimeError(
+                f"Garmin is not authenticated for '{self.user_id}'. Run `coach -u {self.user_id} auth garmin` first."
+            )
+        client = Garmin()
+        client.login(tokenstore=token_dir)
+        return client
+
+    def sync_activities(self, days: int = 7, start_date=None) -> list:
+        """Sync activities and return a list of synced activity placeholders."""
+        res = sync_garmin_activities(self.user_id, start_date_obj=start_date, days=days)
         if "Successfully synced" in res:
             try:
                 count = int(res.split("Successfully synced ")[1].split(" activities")[0])
                 return [{}] * count
             except Exception:
                 return []
-        return []
+        if "No running activities found" in res:
+            return []
+        raise RuntimeError(res)
+
+    def sync_wellness(self, days: int = 7) -> int:
+        """Fetch daily wellness metrics (RHR, HRV, sleep, body battery, stress) into SQLite."""
+        from src.modules.repositories import get_wellness_repository
+
+        client = self._get_client()
+        wellness_repo = get_wellness_repository(self.user_id)
+        saved = 0
+        today = date.today()
+        try:
+            for offset in range(days):
+                target_day = today - timedelta(days=offset)
+                day_str = target_day.isoformat()
+                record = {"date": day_str, "raw": {}}
+
+                try:
+                    stats = client.get_stats(day_str) or {}
+                    record["resting_hr"] = stats.get("restingHeartRate")
+                    record["body_battery_high"] = stats.get("bodyBatteryHighestValue")
+                    record["body_battery_low"] = stats.get("bodyBatteryLowestValue")
+                    record["stress_avg"] = stats.get("averageStressLevel")
+                    record["raw"]["stats"] = stats
+                except Exception:
+                    pass
+
+                try:
+                    sleep = client.get_sleep_data(day_str) or {}
+                    daily_sleep = sleep.get("dailySleepDTO") or {}
+                    record["sleep_duration_sec"] = daily_sleep.get("sleepTimeSeconds")
+                    scores = daily_sleep.get("sleepScores") or {}
+                    overall = scores.get("overall") or {}
+                    record["sleep_score"] = overall.get("value")
+                    record["raw"]["sleep"] = sleep
+                except Exception:
+                    pass
+
+                try:
+                    hrv = client.get_hrv_data(day_str) or {}
+                    hrv_summary = hrv.get("hrvSummary") or {}
+                    record["hrv_ms"] = hrv_summary.get("lastNightAvg") or hrv_summary.get("weeklyAvg")
+                    record["raw"]["hrv"] = hrv
+                except Exception:
+                    pass
+
+                if any(
+                    record.get(k) is not None
+                    for k in ("resting_hr", "hrv_ms", "sleep_score", "sleep_duration_sec", "body_battery_high", "stress_avg")
+                ):
+                    wellness_repo.save(record)
+                    saved += 1
+        finally:
+            wellness_repo.close()
+        return saved
 

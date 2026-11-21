@@ -15,7 +15,50 @@ from datetime import datetime
 from typing import Optional
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+
+def _ensure_column(cursor: sqlite3.Cursor, table: str, column: str, col_def: str) -> None:
+    """Add a column to an existing table if it does not already exist."""
+    cursor.execute(f"PRAGMA table_info({table})")
+    existing = {row[1] for row in cursor.fetchall()}
+    if column not in existing:
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
+
+
+def migrate_schema(conn: sqlite3.Connection) -> None:
+    """Idempotently migrate an existing database to the latest schema version."""
+    cursor = conn.cursor()
+
+    # Ensure v2 columns on activities
+    _ensure_column(cursor, "activities", "source", "TEXT DEFAULT 'garmin'")
+    _ensure_column(cursor, "activities", "external_id", "TEXT")
+    _ensure_column(cursor, "activities", "start_time_utc", "TEXT")
+    _ensure_column(cursor, "activities", "streams_json", "TEXT")
+
+    # Daily wellness table (resting HR, HRV, sleep, body battery, stress)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS daily_wellness (
+            date DATE PRIMARY KEY,
+            resting_hr INTEGER,
+            hrv_ms REAL,
+            sleep_score INTEGER,
+            sleep_duration_sec INTEGER,
+            body_battery_high INTEGER,
+            body_battery_low INTEGER,
+            stress_avg INTEGER,
+            raw_json TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_activities_source ON activities(source, external_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_wellness_date ON daily_wellness(date DESC)")
+    cursor.execute("""
+        INSERT OR REPLACE INTO schema_version (version, applied_at)
+        VALUES (?, ?)
+    """, (SCHEMA_VERSION, datetime.now()))
+    conn.commit()
 
 
 def create_schema(conn: sqlite3.Connection):
@@ -95,13 +138,8 @@ def create_schema(conn: sqlite3.Connection):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_activities_distance ON activities(distance_m DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_journals_date ON journals(date DESC)")
 
-    # Record schema version
-    cursor.execute("""
-        INSERT OR REPLACE INTO schema_version (version, applied_at)
-        VALUES (?, ?)
-    """, (SCHEMA_VERSION, datetime.now()))
-
-    conn.commit()
+    # Apply any incremental schema migrations (v2+ columns & tables)
+    migrate_schema(conn)
     print(f"✓ Database schema created (version {SCHEMA_VERSION})")
 
 
